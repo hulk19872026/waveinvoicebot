@@ -30,11 +30,18 @@ def check_key():
              f"has spaces inside: {any(ch.isspace() for ch in API_KEY)}")
     try:
         _client.models.list(limit=1)
-        return f"Anthropic key OK ({shape}); model setting: {MODEL}"
     except anthropic.APIStatusError as e:
         return f"Anthropic key REJECTED {e.status_code} ({shape})"
     except Exception as e:  # network etc.
         return f"Anthropic key check failed: {e} ({shape})"
+    try:  # the same kind of call a text makes
+        _client.messages.create(model=MODEL, max_tokens=1, messages=[{"role": "user", "content": "hi"}])
+        return f"Anthropic key OK, test message with {MODEL} OK ({shape})"
+    except anthropic.APIStatusError as e:
+        return f"Anthropic key OK but test message with {MODEL} FAILED {e.status_code}: {e.message}"
+    except Exception as e:  # network etc.
+        return f"Anthropic test message failed: {e}"
+
 
 SYSTEM = """You turn short WhatsApp texts from a small-business owner into JSON for their Wave accounting bot.
 Return ONLY a JSON object, no prose, no code fences.

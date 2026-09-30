@@ -202,6 +202,8 @@ def handle(phone, body):
     if cmd in ("cancel", "no", "stop", "discard"):
         PENDING.pop(phone, None)
         return "🗑️ Discarded.", None
+    if cmd == "status":
+        return check_key(), None
     if cmd == "refresh":
         wave.refresh()
         return f"🔄 Reloaded {len(wave.customers)} clients and {len(wave.products)} products.", None
