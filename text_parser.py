@@ -5,7 +5,18 @@ import re
 
 import anthropic
 
-_client = anthropic.Anthropic()
+
+def _env(name):
+    """Env var with stray whitespace/quotes (common copy-paste slips) removed."""
+    return (os.getenv(name) or "").strip().strip("'\"").strip() or None
+
+
+API_KEY = _env("ANTHROPIC_API_KEY")
+# Keys not scoped to a workspace need the workspace ID sent with every request.
+_ws = _env("ANTHROPIC_WORKSPACE_ID")
+_client = anthropic.Anthropic(api_key=API_KEY,
+                              default_headers={"anthropic-workspace-id": _ws} if _ws else None)
+
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 
 SYSTEM = """You turn short WhatsApp texts from a small-business owner into JSON for their Wave accounting bot.

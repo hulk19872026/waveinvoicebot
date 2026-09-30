@@ -21,7 +21,7 @@ Everything is created as a **draft**, so nothing is sent to a client until you s
 2. Open the app and click **Create token** (full access token). Copy it into `WAVE_TOKEN`.
 
 ### 2. Claude API key
-Get one at https://console.anthropic.com → `ANTHROPIC_API_KEY`. (Claude reads your texts and turns them into line items. Cost is a fraction of a cent per message.)
+Get one at https://console.anthropic.com → `ANTHROPIC_API_KEY`. Create the key inside a workspace; if your key isn't scoped to one, also set `ANTHROPIC_WORKSPACE_ID`. (Claude reads your texts and turns them into line items. Cost is a fraction of a cent per message.)
 
 ### 3. Twilio WhatsApp
 1. Create a Twilio account → **Messaging → Try it out → Send a WhatsApp message**.
