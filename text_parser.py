@@ -5,7 +5,9 @@ import re
 
 import anthropic
 
-_client = anthropic.Anthropic()
+# Keys not scoped to a workspace need the workspace ID sent with every request.
+_ws = os.getenv("ANTHROPIC_WORKSPACE_ID")
+_client = anthropic.Anthropic(default_headers={"anthropic-workspace-id": _ws} if _ws else None)
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 
 SYSTEM = """You turn short WhatsApp texts from a small-business owner into JSON for their Wave accounting bot.
