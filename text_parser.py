@@ -19,6 +19,23 @@ _client = anthropic.Anthropic(api_key=API_KEY,
 
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 
+
+def check_key():
+    """One-line startup diagnosis of the Anthropic key (never prints the key itself)."""
+    if not API_KEY:
+        return "ANTHROPIC_API_KEY is missing"
+    shape = (f"length {len(API_KEY)} (expected ~108), "
+             f"starts with sk-ant-api03-: {API_KEY.startswith('sk-ant-api03-')}, "
+             f"ends with AA: {API_KEY.endswith('AA')}, "
+             f"has spaces inside: {any(ch.isspace() for ch in API_KEY)}")
+    try:
+        _client.models.list(limit=1)
+        return f"Anthropic key OK ({shape}); model setting: {MODEL}"
+    except anthropic.APIStatusError as e:
+        return f"Anthropic key REJECTED {e.status_code} ({shape})"
+    except Exception as e:  # network etc.
+        return f"Anthropic key check failed: {e} ({shape})"
+
 SYSTEM = """You turn short WhatsApp texts from a small-business owner into JSON for their Wave accounting bot.
 Return ONLY a JSON object, no prose, no code fences.
 
