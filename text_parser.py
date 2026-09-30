@@ -1,4 +1,5 @@
 """Turns a WhatsApp text into structured JSON using Claude."""
+import hashlib
 import json
 import os
 import re
@@ -27,7 +28,9 @@ def check_key():
     shape = (f"length {len(API_KEY)} (expected ~108), "
              f"starts with sk-ant-api03-: {API_KEY.startswith('sk-ant-api03-')}, "
              f"ends with AA: {API_KEY.endswith('AA')}, "
-             f"has spaces inside: {any(ch.isspace() for ch in API_KEY)}")
+             f"has spaces inside: {any(ch.isspace() for ch in API_KEY)}, "
+             f"sha256 {hashlib.sha256(API_KEY.encode()).hexdigest()[:12]}, "
+             f"deployment {(os.getenv('RAILWAY_DEPLOYMENT_ID') or '?')[:8]}")
     try:
         _client.models.list(limit=1)
     except anthropic.APIStatusError as e:
