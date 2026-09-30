@@ -10,7 +10,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 
 load_dotenv()
 
-from text_parser import parse  # noqa: E402
+from text_parser import check_key, parse  # noqa: E402
 from wave_api import Wave, WaveError  # noqa: E402
 
 app = Flask(__name__)
@@ -20,6 +20,8 @@ ALLOWED = {n.strip() for n in os.getenv("ALLOWED_NUMBERS", "").split(",") if n.s
 VALIDATOR = RequestValidator(os.getenv("TWILIO_AUTH_TOKEN", ""))
 CUR = os.getenv("CURRENCY_SYMBOL", "$")
 MATCH_CUTOFF = 85
+
+print(check_key(), flush=True)  # shows in Railway logs
 
 PENDING = {}  # phone -> draft waiting for YES
 
