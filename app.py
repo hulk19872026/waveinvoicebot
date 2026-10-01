@@ -57,6 +57,11 @@ def dec(v, default=None):
         return default
 
 
+def contact(name, email, phone, tag=""):
+    """Client block shown on every estimate/invoice message."""
+    return f"👤 {name}{tag}\n✉️ {email or 'no email on file'}\n📞 {phone or 'no phone on file'}"
+
+
 def best_match(name, records):
     names = [r["name"] for r in records]
     hit = process.extractOne(name, names, scorer=fuzz.WRatio, processor=utils.default_process, score_cutoff=MATCH_CUTOFF)
@@ -76,7 +81,8 @@ def resolve_client(c):
         return {"new": True, **c}, warn or None
     match, sugg = best_match(c["name"], wave.customers)
     if match:
-        return {"new": False, "id": match["id"], "name": match["name"]}, None
+        return {"new": False, "id": match["id"], "name": match["name"], "email": match.get("email"),
+                "phone": match.get("phone") or match.get("mobile")}, None
     hint = f" Did you mean: {', '.join(sugg)}?" if sugg else ""
     return None, f"❓ I couldn't find client \"{c['name']}\".{hint}\nOr say \"new client {c['name']}\"."
 
@@ -110,7 +116,8 @@ def resolve_items(items):
 # ---------------- previews ----------------
 def doc_preview(d):
     lines = [f"📄 *{d['kind'].upper()} PREVIEW*",
-             f"Client: {d['client']['name']}{' 🆕' if d['client']['new'] else ''}", "──────────"]
+             contact(d['client']['name'], d['client'].get('email'), d['client'].get('phone'),
+                     ' 🆕' if d['client']['new'] else ''), "──────────"]
     subtotal = Decimal(0)
     for it in d["items"]:
         line = it["quantity"] * it["unit_price"]
@@ -203,7 +210,7 @@ def execute(d, phone):
         LAST[phone] = doc
         extra = "\nReply *CONVERT* to turn it into an invoice" if doc["kind"] == "estimate" else ""
         return (f"✅ {doc['kind'].title()} *#{doc['number']}* was sent to {to}\n"
-                f"Client: {doc['client']} · Total: {money(doc['total'])}{extra}"), None
+                f"{contact(doc['client'], doc.get('email'), doc.get('phone'))}\nTotal: {money(doc['total'])}{extra}"), None
 
     if d["kind"] == "convert":
         doc = d["doc"]
@@ -213,8 +220,9 @@ def execute(d, phone):
         if d.get("then_send"):
             wave.send_doc(inv, d["to"])
             return (f"{done}\n✅ Invoice *#{inv['number']}* was sent to {d['to']}\n"
-                    f"Client: {inv['client']} · Total: {money(inv['total'])}\n\n🔗 {inv['view_url']}"), inv.get("pdf_url")
-        return (f"{done}\nClient: {inv['client']}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
+                    f"{contact(inv['client'], inv.get('email'), inv.get('phone'))}\nTotal: {money(inv['total'])}"
+                    f"\n\n🔗 {inv['view_url']}"), inv.get("pdf_url")
+        return (f"{done}\n{contact(inv['client'], inv.get('email'), inv.get('phone'))}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
                 f"{next_steps(inv)}"), inv.get("pdf_url")
 
     if d["kind"] == "client_update":
@@ -243,7 +251,8 @@ def execute(d, phone):
     doc = create(customer_id, d["items"], d.get("memo"))
     LAST[phone] = doc
     reply = (f"✅ {d['kind'].title()} *#{doc['number']}* created as a draft in Wave\n"
-             f"Client: {doc['client']}\nTotal: {money(doc['total'])}\n\n🔗 {doc['view_url']}\n\n{next_steps(doc)}")
+             f"{contact(doc['client'], doc.get('email'), doc.get('phone'))}\nTotal: {money(doc['total'])}"
+             f"\n\n🔗 {doc['view_url']}\n\n{next_steps(doc)}")
     return reply, doc.get("pdf_url")
 
 
@@ -300,7 +309,7 @@ def doc_action(phone, convert, send, kind=None, number=None, to=None):
     if send and not to:
         return (f"No email on file for {doc['client']}. Add one with \"change email to name@email.com\" "
                 f"or say \"... to name@email.com\"."), None
-    head = f"Client: {doc['client']} · Total: {money(doc['total'])}"
+    head = f"{contact(doc['client'], doc.get('email'), doc.get('phone'))}\nTotal: {money(doc['total'])}"
     if convert:
         PENDING[phone] = {"kind": "convert", "doc": doc, "then_send": send, "to": to}
         what = f"CONVERT ESTIMATE #{doc['number']} TO AN INVOICE" + (" AND EMAIL IT" if send else "")
