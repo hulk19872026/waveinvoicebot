@@ -11,8 +11,8 @@ Text WhatsApp, get a preview, reply **YES**, and a draft invoice or estimate app
 - **Edits clients**: `change Bob Jones email to bob@new.com` (also phone or name), with a preview before saving
 - **Preview first**: shows line items and subtotal. Text a change ("make it 3 mowings", "add a hedge trim") or reply YES / CANCEL.
 - After creation it replies with the invoice/estimate number, total, a Wave link, and attaches the PDF when Wave provides one.
-- **Send it**: reply `SEND` to email the last invoice/estimate (with PDF) to the client's email in Wave, or `send estimate 12 to bob@x.com`. You get a "📧 sent" confirmation. Requires email sending to be enabled in your Wave business.
-- **Convert**: reply `CONVERT` to turn the last estimate into an invoice, or `convert estimate 12`. Then `SEND` emails the new invoice.
+- **Send it**: reply `SEND` (then `YES` to confirm) to email the last invoice/estimate (with PDF) to the client's email in Wave, or `send estimate 12 to bob@x.com`. You get a "📧 sent" confirmation. Requires email sending to be enabled in your Wave business.
+- **Convert**: reply `CONVERT` (then `YES` to confirm) to turn the last estimate into an invoice, or `convert estimate 12`. Then `SEND` emails the new invoice.
 - Other commands: `HELP`, `REFRESH` (reload clients/products after editing them in Wave).
 
 Everything is created as a **draft**, so nothing goes to a client until you reply `SEND` (or send it from Wave).
