@@ -75,7 +75,7 @@ class Wave:
 
     def refresh(self):
         """Reload clients and products from Wave."""
-        self.customers = self._paged("customers", "id name email phone")
+        self.customers = self._paged("customers", "id name email phone mobile")
         prods = self._paged("products", "id name description unitPrice isSold isArchived defaultSalesTaxes { id }")
         self.products = [p for p in prods if p["isSold"] and not p["isArchived"]]
 
@@ -85,14 +85,14 @@ class Wave:
         for k, v in {"email": email, "phone": phone, "firstName": first_name, "lastName": last_name}.items():
             if v:
                 inp[k] = v
-        c = self._mutate("customerCreate", "CustomerCreateInput", inp, "customer { id name email }")["customer"]
+        c = self._mutate("customerCreate", "CustomerCreateInput", inp, "customer { id name email phone mobile }")["customer"]
         self.customers.append(c)
         return c
 
     def update_customer(self, customer_id, **changes):
         """Change a client's name/email/phone in Wave. Only fields given are changed."""
         inp = {"id": customer_id, **{k: v for k, v in changes.items() if v}}
-        c = self._mutate("customerPatch", "CustomerPatchInput", inp, "customer { id name email phone }")["customer"]
+        c = self._mutate("customerPatch", "CustomerPatchInput", inp, "customer { id name email phone mobile }")["customer"]
         self.customers = [c if x["id"] == c["id"] else x for x in self.customers]
         return c
 
@@ -134,13 +134,14 @@ class Wave:
         return "estimateNumber" if kind == "estimate" else "invoiceNumber"
 
     def _doc_fields(self, kind):
-        return f"id {self._num_field(kind)} status viewUrl pdfUrl total {{ value }} customer {{ name email }}"
+        return f"id {self._num_field(kind)} status viewUrl pdfUrl total {{ value }} customer {{ name email phone mobile }}"
 
     def _doc(self, kind, d):
         """Normalize a Wave invoice/estimate into a plain dict."""
         return {"kind": kind, "id": d["id"], "number": d[self._num_field(kind)], "status": d["status"],
                 "view_url": d["viewUrl"], "pdf_url": d["pdfUrl"], "total": d["total"]["value"],
-                "client": d["customer"]["name"], "email": d["customer"].get("email")}
+                "client": d["customer"]["name"], "email": d["customer"].get("email"),
+                "phone": d["customer"].get("phone") or d["customer"].get("mobile")}
 
     def create_invoice(self, customer_id, items, memo=None):
         inp = {"businessId": self.business_id, "customerId": customer_id,
