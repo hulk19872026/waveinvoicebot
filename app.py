@@ -1,5 +1,6 @@
 """WhatsApp -> Wave invoice/estimate bot (Twilio webhook)."""
 import os
+import re
 from decimal import Decimal, InvalidOperation
 
 from dotenv import load_dotenv
@@ -38,7 +39,11 @@ HELP = (
 
 
 def money(v):
-    return f"{CUR}{Decimal(str(v)):,.2f}"
+    # Wave can return amounts as formatted strings ("4,175.00"); never fail just to display one
+    try:
+        return f"{CUR}{Decimal(re.sub(r'[^0-9.-]', '', str(v))):,.2f}"
+    except InvalidOperation:
+        return f"{CUR}{v}"
 
 
 def dec(v, default=None):
