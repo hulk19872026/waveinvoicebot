@@ -125,12 +125,15 @@ def doc_preview(d):
         tag = " 🆕" if it["new"] else ""
         tax = " +tax" if it["tax_ids"] else ""
         lines.append(f"{it['quantity'].normalize():f} × {it['name']}{tag} @ {money(it['unit_price'])} = {money(line)}{tax}")
+        if it.get("description"):
+            lines.append(f"   📝 {it['description']}")
     lines += ["──────────", f"*Subtotal: {money(subtotal)}*"]
     if d.get("memo"):
         lines.append(f"Memo: {d['memo']}")
     if d.get("warning"):
         lines.append(d["warning"])
-    lines.append("\nReply *YES* to create in Wave, *CANCEL*, or text a change.")
+    lines.append("\nReply *YES* to create in Wave, *CANCEL*, or text a change "
+                 "(e.g. \"change the door strike description to ...\").")
     return "\n".join(lines)
 
 
@@ -155,6 +158,9 @@ def build_draft(parsed, phone=None):
         errs = ([cmsg] if cmsg and client is None else []) + ierrs
         if errs:
             return None, "\n".join(errs)
+        # Keep each item's final description in the parsed draft so later edits can see and change it
+        for p_it, r_it in zip(parsed.get("items") or [], items):
+            p_it["description"] = r_it.get("description")
         draft = {"kind": action, "client": client, "items": items,
                  "memo": parsed.get("memo"), "warning": cmsg, "parsed": parsed}
         return draft, doc_preview(draft)
