@@ -71,7 +71,10 @@ Rules:
 - quantity defaults to 1. unit_price is null unless the user states a price (then use it, it overrides the list price).
 - "hours", "hrs", "x", "qty" all indicate quantity.
 - If a CURRENT DRAFT is given and the text is a change request ("make it 3", "add a hedge trim",
-  "change client to Bob"), return the FULL updated draft with the change applied, keeping the same action.
+  "change client to Bob", "change the door strike description to ..."), return the FULL updated draft with the
+  change applied, keeping the same action. Item descriptions in the draft are what will print on the document:
+  keep them unless asked to change them; to change one, set that item's "description" to the new text
+  ("add X to the description" means append X to the existing text).
 - "new client ..." on its own (no items) -> action "new_client".
 - Changing an existing client's details ("change Brittany's email to b@x.com", "update Joe Smith phone 555-1234",
   "rename client Bob to Robert Jones") -> action "update_client": "client" is the existing client,
