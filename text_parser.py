@@ -73,7 +73,8 @@ Rules:
 - "new client ..." on its own (no items) -> action "new_client".
 - Changing an existing client's details ("change Brittany's email to b@x.com", "update Joe Smith phone 555-1234",
   "rename client Bob to Robert Jones") -> action "update_client": "client" is the existing client,
-  "client_changes" holds only the fields being changed (others null).
+  "client_changes" holds only the fields being changed (others null). If no client is named
+  ("change email to b@x.com"), still use action "update_client" with "client": null.
 - "new product/service ..." on its own -> action "new_product".
 """
 
