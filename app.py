@@ -209,8 +209,12 @@ def execute(d, phone):
         doc = d["doc"]
         inv = wave.convert_estimate(doc)
         LAST[phone] = inv
-        return (f"✅ Estimate *#{doc['number']}* converted to Invoice *#{inv['number']}*\n"
-                f"Client: {inv['client']}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
+        done = f"✅ Estimate *#{doc['number']}* converted to Invoice *#{inv['number']}*"
+        if d.get("then_send"):
+            wave.send_doc(inv, d["to"])
+            return (f"{done}\n✅ Invoice *#{inv['number']}* was sent to {d['to']}\n"
+                    f"Client: {inv['client']} · Total: {money(inv['total'])}\n\n🔗 {inv['view_url']}"), inv.get("pdf_url")
+        return (f"{done}\nClient: {inv['client']}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
                 f"{next_steps(inv)}"), inv.get("pdf_url")
 
     if d["kind"] == "client_update":
@@ -251,12 +255,13 @@ def next_steps(doc):
     return "\n".join(lines)
 
 
-# "send", "send it", "send estimate 12", "email invoice #7 to bob@x.com"
-SEND_RE = re.compile(r"^(?:send|email)(?:\s+(?:it|the|this))?(?:\s+(estimate|quote|invoice))?(?:\s*#?\s*(\d+))?"
-                     r"(?:\s+to\s+([\w.+-]+@[\w-]+(?:\.[\w-]+)+))?\s*$", re.I)
-# "convert", "convert it", "convert estimate 12 to an invoice"
-CONVERT_RE = re.compile(r"^convert(?:\s+(?:it|the|this))?(?:\s+(?:estimate|quote))?(?:\s*#?\s*(\d+))?"
-                        r"(?:\s+(?:to|into)\s+(?:an?\s+)?invoice)?\s*$", re.I)
+EMAIL = r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"
+# "send", "send estimate 12 to bob@x.com", "convert it", "convert estimate 478 to an invoice and send it"
+DOC_CMD_RE = re.compile(
+    r"^(?:please\s+)?(?P<verb>convert|send|email)(?:\s+(?:it|the|this))?(?:\s+(?P<kind>estimate|quote|invoice))?"
+    r"(?:\s*(?:number|no\.?)?\s*#?\s*(?P<num>\d+))?(?:\s+(?:to|into)\s+(?:an?\s+)?invoice)?"
+    r"(?:\s*(?:,|and|&|then)\s*(?:then\s+)?(?P<send2>send|email)(?:\s+(?:it|the\s+invoice))?)?"
+    rf"(?:\s+to\s+(?P<to>{EMAIL}))?\s*(?:please)?[.!]*$", re.I)
 
 
 # "change email to x@y.com", "update phone number to 555-1234"
@@ -278,38 +283,42 @@ def pick_doc(phone, kind, number):
     return None, f"Which one? e.g. \"send {kind or 'estimate'} 12\""
 
 
-def doc_command(phone, body):
-    """Handle SEND / CONVERT. Returns (reply, media) or None if the text isn't one of these."""
-    text = body.strip()
-    m = SEND_RE.match(text)
-    if m:
-        if PENDING.get(phone) and not m[2]:
-            return "Something is waiting for your OK. Reply *YES* to confirm it or *CANCEL*, then *SEND*.", None
-        kind = {"quote": "estimate"}.get((m[1] or "").lower(), (m[1] or "").lower() or None)
-        doc, err = pick_doc(phone, kind, m[2])
-        if err:
-            return err, None
-        to = m[3] or doc.get("email")
-        if not to:
-            return (f"No email on file for {doc['client']}. Reply: send {doc['kind']} {doc['number']} "
-                    f"to name@email.com"), None
-        PENDING[phone] = {"kind": "send", "doc": doc, "to": to}
-        return (f"📧 *SEND {doc['kind'].upper()} #{doc['number']}?*\n"
-                f"To: {to}\nClient: {doc['client']} · Total: {money(doc['total'])}\n\n"
-                "Reply *YES* to email it (PDF attached) or *CANCEL*."), None
-
-    m = CONVERT_RE.match(text)
-    if m:
-        doc, err = pick_doc(phone, "estimate", m[1])
-        if err:
-            return err, None
-        if doc["kind"] != "estimate":
+def doc_action(phone, convert, send, kind=None, number=None, to=None):
+    """Preview a SEND / CONVERT / CONVERT+SEND and hold it until YES."""
+    if PENDING.get(phone) and not number:
+        return "Something is waiting for your OK. Reply *YES* to confirm it or *CANCEL* first.", None
+    if convert:
+        if kind == "invoice":
             return "Only estimates can be converted. e.g. \"convert estimate 12\"", None
-        PENDING[phone] = {"kind": "convert", "doc": doc}
-        return (f"🔁 *CONVERT ESTIMATE #{doc['number']} TO AN INVOICE?*\n"
-                f"Client: {doc['client']} · Total: {money(doc['total'])}\n\n"
-                "Reply *YES* to convert or *CANCEL*."), None
-    return None
+        kind = "estimate"
+    doc, err = pick_doc(phone, kind, number)
+    if err:
+        return err, None
+    if convert and doc["kind"] != "estimate":
+        return "Only estimates can be converted. e.g. \"convert estimate 12\"", None
+    to = to or doc.get("email")
+    if send and not to:
+        return (f"No email on file for {doc['client']}. Add one with \"change email to name@email.com\" "
+                f"or say \"... to name@email.com\"."), None
+    head = f"Client: {doc['client']} · Total: {money(doc['total'])}"
+    if convert:
+        PENDING[phone] = {"kind": "convert", "doc": doc, "then_send": send, "to": to}
+        what = f"CONVERT ESTIMATE #{doc['number']} TO AN INVOICE" + (" AND EMAIL IT" if send else "")
+        return (f"🔁 *{what}?*\n" + (f"To: {to}\n" if send else "") + f"{head}\n\n"
+                "Reply *YES* to go ahead or *CANCEL*."), None
+    PENDING[phone] = {"kind": "send", "doc": doc, "to": to}
+    return (f"📧 *SEND {doc['kind'].upper()} #{doc['number']}?*\nTo: {to}\n{head}\n\n"
+            "Reply *YES* to email it (PDF attached) or *CANCEL*."), None
+
+
+def doc_command(phone, body):
+    """Short SEND / CONVERT texts. Returns (reply, media) or None if the text isn't one."""
+    m = DOC_CMD_RE.match(body.strip())
+    if not m:
+        return None
+    kind = {"quote": "estimate"}.get((m["kind"] or "").lower(), (m["kind"] or "").lower() or None)
+    convert = m["verb"].lower() == "convert"
+    return doc_action(phone, convert, not convert or bool(m["send2"]), kind, m["num"], m["to"])
 
 
 def handle(phone, body):
@@ -344,6 +353,10 @@ def handle(phone, body):
 
     current = PENDING.get(phone, {}).get("parsed")
     parsed = parse(body, [c["name"] for c in wave.customers], [p["name"] for p in wave.products], current)
+    if parsed.get("action") == "document":
+        a = parsed.get("document") or {}
+        return doc_action(phone, bool(a.get("convert")), bool(a.get("send")), a.get("kind"),
+                          a.get("number"), a.get("send_to"))
     draft, reply = build_draft(parsed, phone)
     if draft:
         PENDING[phone] = draft
