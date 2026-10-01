@@ -34,6 +34,7 @@ HELP = (
     "• invoice NEW client Mike Ross mike@x.com: 1 NEW product gutter clean at 120\n"
     "• new client Bob Jones, bob@x.com, 555-123-4567\n"
     "• new product Window Wash 60\n"
+    "• change Bob Jones email to bob@new.com\n"
     "• YES to create · CANCEL to discard · REFRESH to reload lists\n"
     "• Send a change (\"make it 3 lawn mowings\") to edit the preview\n"
     "• SEND to email the last one to the client (or: send estimate 12 to bob@x.com)\n"
@@ -159,6 +160,22 @@ def build_draft(parsed):
         c["warning"] = f"⚠️ Similar client already exists: {existing['name']}" if existing else None
         return {"kind": "client", "client": c, "parsed": parsed}, client_preview(c)
 
+    if action == "update_client":
+        name = (parsed.get("client") or {}).get("name")
+        changes = {k: v for k, v in (parsed.get("client_changes") or {}).items() if v}
+        if not name or not changes:
+            return None, "Which client and what should change? e.g. \"change Brittany Spears email to b@x.com\""
+        match, sugg = best_match(name, wave.customers)
+        if not match:
+            hint = f" Did you mean: {', '.join(sugg)}?" if sugg else ""
+            return None, f"❓ I couldn't find client \"{name}\".{hint}"
+        lines = [f"✏️ *UPDATE CLIENT* {match['name']}"]
+        for k in ("name", "email", "phone"):
+            if k in changes:
+                lines.append(f"{k.title()}: {match.get(k) or '—'} → {changes[k]}")
+        lines.append("\nReply *YES* to save in Wave or *CANCEL*.")
+        return {"kind": "client_update", "client": match, "changes": changes, "parsed": parsed}, "\n".join(lines)
+
     if action == "new_product":
         p = parsed.get("new_product") or {}
         if not p.get("name") or p.get("unit_price") is None:
@@ -178,6 +195,11 @@ def execute(d, phone):
         c = d["client"]
         new = wave.create_customer(c["name"], c.get("email"), c.get("phone"), c.get("first_name"), c.get("last_name"))
         return f"✅ Client *{new['name']}* added to Wave.", None
+
+    if d["kind"] == "client_update":
+        c = wave.update_customer(d["client"]["id"], **d["changes"])
+        details = " · ".join(x for x in (c.get("email"), c.get("phone")) if x)
+        return f"✅ Client *{c['name']}* updated in Wave.\n{details}", None
 
     if d["kind"] == "product":
         p = d["product"]

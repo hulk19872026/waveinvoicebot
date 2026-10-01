@@ -8,6 +8,7 @@ Text WhatsApp, get a preview, reply **YES**, and a draft invoice or estimate app
 - **Only creates new clients/products when you say "new"**: `estimate NEW client Mike Ross mike@x.com: 1 NEW product gutter clean at 120`
 - **Adds clients**: `new client Bob Jones, bob@x.com, 555-123-4567`
 - **Adds products**: `new product Window Wash 60`
+- **Edits clients**: `change Bob Jones email to bob@new.com` (also phone or name), with a preview before saving
 - **Preview first**: shows line items and subtotal. Text a change ("make it 3 mowings", "add a hedge trim") or reply YES / CANCEL.
 - After creation it replies with the invoice/estimate number, total, a Wave link, and attaches the PDF when Wave provides one.
 - **Send it**: reply `SEND` to email the last invoice/estimate (with PDF) to the client's email in Wave, or `send estimate 12 to bob@x.com`. You get a "📧 sent" confirmation. Requires email sending to be enabled in your Wave business.
