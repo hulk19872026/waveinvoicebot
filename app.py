@@ -25,6 +25,7 @@ MATCH_CUTOFF = 85
 print(check_key(), flush=True)  # shows in Railway logs
 
 PENDING = {}  # phone -> draft waiting for YES
+LAST = {}  # phone -> last invoice/estimate created or converted, for SEND / CONVERT
 
 HELP = (
     "🧾 *Wave Bot*\n"
@@ -34,7 +35,9 @@ HELP = (
     "• new client Bob Jones, bob@x.com, 555-123-4567\n"
     "• new product Window Wash 60\n"
     "• YES to create · CANCEL to discard · REFRESH to reload lists\n"
-    "• Send a change (\"make it 3 lawn mowings\") to edit the preview"
+    "• Send a change (\"make it 3 lawn mowings\") to edit the preview\n"
+    "• SEND to email the last one to the client (or: send estimate 12 to bob@x.com)\n"
+    "• CONVERT to turn the last estimate into an invoice (or: convert estimate 12)"
 )
 
 
@@ -169,7 +172,7 @@ def build_draft(parsed):
     return None, "🤔 Didn't catch that. Text HELP for examples."
 
 
-def execute(d):
+def execute(d, phone):
     """Create everything in Wave. Returns (reply_text, media_url)."""
     if d["kind"] == "client":
         c = d["client"]
@@ -195,9 +198,76 @@ def execute(d):
 
     create = wave.create_invoice if d["kind"] == "invoice" else wave.create_estimate
     doc = create(customer_id, d["items"], d.get("memo"))
+    LAST[phone] = doc
     reply = (f"✅ {d['kind'].title()} *#{doc['number']}* created as a draft in Wave\n"
-             f"Client: {c['name']}\nTotal: {money(doc['total'])}\n\n🔗 {doc['view_url']}")
+             f"Client: {doc['client']}\nTotal: {money(doc['total'])}\n\n🔗 {doc['view_url']}\n\n{next_steps(doc)}")
     return reply, doc.get("pdf_url")
+
+
+def next_steps(doc):
+    to = doc.get("email")
+    lines = [f"Reply *SEND* to email it to {to}" if to else "Reply *SEND to name@email.com* to email it"]
+    if doc["kind"] == "estimate":
+        lines.append("Reply *CONVERT* to turn it into an invoice")
+    return "\n".join(lines)
+
+
+# "send", "send it", "send estimate 12", "email invoice #7 to bob@x.com"
+SEND_RE = re.compile(r"^(?:send|email)(?:\s+(?:it|the|this))?(?:\s+(estimate|quote|invoice))?(?:\s*#?\s*(\d+))?"
+                     r"(?:\s+to\s+([\w.+-]+@[\w-]+(?:\.[\w-]+)+))?\s*$", re.I)
+# "convert", "convert it", "convert estimate 12 to an invoice"
+CONVERT_RE = re.compile(r"^convert(?:\s+(?:it|the|this))?(?:\s+(?:estimate|quote))?(?:\s*#?\s*(\d+))?"
+                        r"(?:\s+(?:to|into)\s+(?:an?\s+)?invoice)?\s*$", re.I)
+
+
+def pick_doc(phone, kind, number):
+    """The document a SEND/CONVERT refers to: by number if given, else the last one made here."""
+    last = LAST.get(phone)
+    if number:
+        kind = kind or (last or {}).get("kind")
+        if not kind:
+            return None, f"Estimate or invoice? e.g. \"send estimate {number}\""
+        doc = wave.find_doc(kind, number)
+        return (doc, None) if doc else (None, f"❓ Couldn't find {kind} #{number} in Wave.")
+    if last and (not kind or kind == last["kind"]):
+        return wave.get_doc(last["kind"], last["id"]) or last, None
+    return None, f"Which one? e.g. \"send {kind or 'estimate'} 12\""
+
+
+def doc_command(phone, body):
+    """Handle SEND / CONVERT. Returns (reply, media) or None if the text isn't one of these."""
+    text = body.strip()
+    m = SEND_RE.match(text)
+    if m:
+        if PENDING.get(phone) and not m[2]:
+            return "You have a preview waiting. Reply *YES* to create it first, then *SEND*.", None
+        kind = {"quote": "estimate"}.get((m[1] or "").lower(), (m[1] or "").lower() or None)
+        doc, err = pick_doc(phone, kind, m[2])
+        if err:
+            return err, None
+        to = m[3] or doc.get("email")
+        if not to:
+            return (f"No email on file for {doc['client']}. Reply: send {doc['kind']} {doc['number']} "
+                    f"to name@email.com"), None
+        wave.send_doc(doc, to)
+        LAST[phone] = doc
+        extra = "\nReply *CONVERT* to turn it into an invoice" if doc["kind"] == "estimate" else ""
+        return (f"📧 {doc['kind'].title()} *#{doc['number']}* sent to {to}\n"
+                f"Client: {doc['client']} · Total: {money(doc['total'])}{extra}"), None
+
+    m = CONVERT_RE.match(text)
+    if m:
+        doc, err = pick_doc(phone, "estimate", m[1])
+        if err:
+            return err, None
+        if doc["kind"] != "estimate":
+            return "Only estimates can be converted. e.g. \"convert estimate 12\"", None
+        inv = wave.convert_estimate(doc)
+        LAST[phone] = inv
+        return (f"🔁 Estimate *#{doc['number']}* converted to Invoice *#{inv['number']}*\n"
+                f"Client: {inv['client']}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
+                f"{next_steps(inv)}"), inv.get("pdf_url")
+    return None
 
 
 def handle(phone, body):
@@ -212,11 +282,14 @@ def handle(phone, body):
     if cmd == "refresh":
         wave.refresh()
         return f"🔄 Reloaded {len(wave.customers)} clients and {len(wave.products)} products.", None
-    if cmd in ("yes", "y", "ok", "confirm", "create", "send"):
+    if cmd in ("yes", "y", "ok", "confirm", "create"):
         draft = PENDING.pop(phone, None)
         if not draft:
             return "Nothing waiting to create. Text HELP for examples.", None
-        return execute(draft)
+        return execute(draft, phone)
+    done = doc_command(phone, body)
+    if done:
+        return done
 
     current = PENDING.get(phone, {}).get("parsed")
     parsed = parse(body, [c["name"] for c in wave.customers], [p["name"] for p in wave.products], current)

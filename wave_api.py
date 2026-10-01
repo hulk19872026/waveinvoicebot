@@ -121,23 +121,71 @@ class Wave:
             out.append(row)
         return out
 
+    # ---------- invoices & estimates ----------
+    @staticmethod
+    def _num_field(kind):
+        return "estimateNumber" if kind == "estimate" else "invoiceNumber"
+
+    def _doc_fields(self, kind):
+        return f"id {self._num_field(kind)} status viewUrl pdfUrl total {{ value }} customer {{ name email }}"
+
+    def _doc(self, kind, d):
+        """Normalize a Wave invoice/estimate into a plain dict."""
+        return {"kind": kind, "id": d["id"], "number": d[self._num_field(kind)], "status": d["status"],
+                "view_url": d["viewUrl"], "pdf_url": d["pdfUrl"], "total": d["total"]["value"],
+                "client": d["customer"]["name"], "email": d["customer"].get("email")}
+
     def create_invoice(self, customer_id, items, memo=None):
         inp = {"businessId": self.business_id, "customerId": customer_id,
                "status": "DRAFT", "items": self._items(items)}
         if memo:
             inp["memo"] = memo
-        inv = self._mutate("invoiceCreate", "InvoiceCreateInput", inp,
-                           "invoice { id invoiceNumber viewUrl pdfUrl total { value currency { code } } }")["invoice"]
-        return {"number": inv["invoiceNumber"], "view_url": inv["viewUrl"],
-                "pdf_url": inv["pdfUrl"], "total": inv["total"]["value"]}
+        out = self._mutate("invoiceCreate", "InvoiceCreateInput", inp, f"invoice {{ {self._doc_fields('invoice')} }}")
+        return self._doc("invoice", out["invoice"])
 
     def create_estimate(self, customer_id, items, memo=None):
-        # Mirrors invoiceCreate. If Wave's schema names differ for your account,
-        # adjust the input/returning fields here (see Wave API Reference: EstimateCreateInput).
         inp = {"businessId": self.business_id, "customerId": customer_id, "items": self._items(items)}
         if memo:
             inp["memo"] = memo
-        est = self._mutate("estimateCreate", "EstimateCreateInput", inp,
-                           "estimate { id estimateNumber viewUrl pdfUrl total { value currency { code } } }")["estimate"]
-        return {"number": est["estimateNumber"], "view_url": est["viewUrl"],
-                "pdf_url": est["pdfUrl"], "total": est["total"]["value"]}
+        out = self._mutate("estimateCreate", "EstimateCreateInput", inp, f"estimate {{ {self._doc_fields('estimate')} }}")
+        return self._doc("estimate", out["estimate"])
+
+    def get_doc(self, kind, doc_id):
+        q = f"""query($b: ID!, $id: ID!) {{
+            business(id: $b) {{ {kind}(id: $id) {{ {self._doc_fields(kind)} }} }}
+        }}"""
+        d = self.gql(q, {"b": self.business_id, "id": doc_id})["business"][kind]
+        return self._doc(kind, d) if d else None
+
+    def find_doc(self, kind, number):
+        """Look up an invoice/estimate by its number (as shown in Wave)."""
+        sort = "ESTIMATE_NUMBER_DESC" if kind == "estimate" else "[INVOICE_NUMBER_DESC]"
+        q = f"""query($b: ID!, $n: String!) {{
+            business(id: $b) {{
+                {kind}s(page: 1, pageSize: 1, sort: {sort}, {self._num_field(kind)}: $n) {{
+                    edges {{ node {{ {self._doc_fields(kind)} }} }}
+                }}
+            }}
+        }}"""
+        edges = self.gql(q, {"b": self.business_id, "n": str(number)})["business"][f"{kind}s"]["edges"]
+        return self._doc(kind, edges[0]["node"]) if edges else None
+
+    def _approve_if_draft(self, doc):
+        # Wave won't email or convert a draft; approving just finalizes it (nothing is sent).
+        if doc["status"] == "DRAFT":
+            k = doc["kind"]
+            self._mutate(f"{k}Approve", f"{k.title()}ApproveInput", {f"{k}Id": doc["id"]}, f"{k} {{ id }}")
+
+    def send_doc(self, doc, to):
+        """Email an invoice/estimate (with PDF) to the client. Requires email sending enabled in Wave."""
+        self._approve_if_draft(doc)
+        k = doc["kind"]
+        self._mutate(f"{k}Send", f"{k.title()}SendInput",
+                     {f"{k}Id": doc["id"], "to": [to], "attachPDF": True}, f"{k} {{ id }}")
+
+    def convert_estimate(self, doc):
+        """Turn an estimate into an invoice. Returns the new invoice."""
+        self._approve_if_draft(doc)
+        out = self._mutate("convertEstimateToInvoice", "ConvertEstimateToInvoiceInput",
+                           {"estimateId": doc["id"]}, "invoiceId")
+        return self.get_doc("invoice", out["invoiceId"])
