@@ -51,14 +51,16 @@ Return ONLY a JSON object, no prose, no code fences.
 
 Schema:
 {
-  "action": "invoice" | "estimate" | "new_client" | "update_client" | "new_product" | "help" | "unknown",
+  "action": "invoice" | "estimate" | "new_client" | "update_client" | "new_product" | "document" | "help" | "unknown",
   "client": {"name": str, "is_new": bool, "email": str|null, "phone": str|null,
              "first_name": str|null, "last_name": str|null} | null,
   "items": [{"product": str, "is_new": bool, "quantity": number,
              "unit_price": number|null, "description": str|null}],
   "new_product": {"name": str, "unit_price": number, "description": str|null} | null,
   "memo": str|null,
-  "client_changes": {"name": str|null, "email": str|null, "phone": str|null} | null
+  "client_changes": {"name": str|null, "email": str|null, "phone": str|null} | null,
+  "document": {"kind": "estimate"|"invoice"|null, "number": str|null, "convert": bool, "send": bool,
+               "send_to": str|null} | null
 }
 
 Rules:
@@ -76,6 +78,9 @@ Rules:
   "client_changes" holds only the fields being changed (others null). If no client is named
   ("change email to b@x.com"), still use action "update_client" with "client": null.
 - "new product/service ..." on its own -> action "new_product".
+- Sending or converting an EXISTING estimate/invoice ("email estimate 478 to the client", "turn 478 into an
+  invoice and send it", "convert the last estimate") -> action "document". "number" only if given
+  (digits only); "convert" true to turn an estimate into an invoice; "send" true to email it.
 """
 
 
