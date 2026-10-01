@@ -196,6 +196,22 @@ def execute(d, phone):
         new = wave.create_customer(c["name"], c.get("email"), c.get("phone"), c.get("first_name"), c.get("last_name"))
         return f"✅ Client *{new['name']}* added to Wave.", None
 
+    if d["kind"] == "send":
+        doc, to = d["doc"], d["to"]
+        wave.send_doc(doc, to)
+        LAST[phone] = doc
+        extra = "\nReply *CONVERT* to turn it into an invoice" if doc["kind"] == "estimate" else ""
+        return (f"✅ {doc['kind'].title()} *#{doc['number']}* was sent to {to}\n"
+                f"Client: {doc['client']} · Total: {money(doc['total'])}{extra}"), None
+
+    if d["kind"] == "convert":
+        doc = d["doc"]
+        inv = wave.convert_estimate(doc)
+        LAST[phone] = inv
+        return (f"✅ Estimate *#{doc['number']}* converted to Invoice *#{inv['number']}*\n"
+                f"Client: {inv['client']}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
+                f"{next_steps(inv)}"), inv.get("pdf_url")
+
     if d["kind"] == "client_update":
         c = wave.update_customer(d["client"]["id"], **d["changes"])
         details = " · ".join(x for x in (c.get("email"), c.get("phone")) if x)
@@ -262,7 +278,7 @@ def doc_command(phone, body):
     m = SEND_RE.match(text)
     if m:
         if PENDING.get(phone) and not m[2]:
-            return "You have a preview waiting. Reply *YES* to create it first, then *SEND*.", None
+            return "Something is waiting for your OK. Reply *YES* to confirm it or *CANCEL*, then *SEND*.", None
         kind = {"quote": "estimate"}.get((m[1] or "").lower(), (m[1] or "").lower() or None)
         doc, err = pick_doc(phone, kind, m[2])
         if err:
@@ -271,11 +287,10 @@ def doc_command(phone, body):
         if not to:
             return (f"No email on file for {doc['client']}. Reply: send {doc['kind']} {doc['number']} "
                     f"to name@email.com"), None
-        wave.send_doc(doc, to)
-        LAST[phone] = doc
-        extra = "\nReply *CONVERT* to turn it into an invoice" if doc["kind"] == "estimate" else ""
-        return (f"📧 {doc['kind'].title()} *#{doc['number']}* sent to {to}\n"
-                f"Client: {doc['client']} · Total: {money(doc['total'])}{extra}"), None
+        PENDING[phone] = {"kind": "send", "doc": doc, "to": to}
+        return (f"📧 *SEND {doc['kind'].upper()} #{doc['number']}?*\n"
+                f"To: {to}\nClient: {doc['client']} · Total: {money(doc['total'])}\n\n"
+                "Reply *YES* to email it (PDF attached) or *CANCEL*."), None
 
     m = CONVERT_RE.match(text)
     if m:
@@ -284,11 +299,10 @@ def doc_command(phone, body):
             return err, None
         if doc["kind"] != "estimate":
             return "Only estimates can be converted. e.g. \"convert estimate 12\"", None
-        inv = wave.convert_estimate(doc)
-        LAST[phone] = inv
-        return (f"🔁 Estimate *#{doc['number']}* converted to Invoice *#{inv['number']}*\n"
-                f"Client: {inv['client']}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
-                f"{next_steps(inv)}"), inv.get("pdf_url")
+        PENDING[phone] = {"kind": "convert", "doc": doc}
+        return (f"🔁 *CONVERT ESTIMATE #{doc['number']} TO AN INVOICE?*\n"
+                f"Client: {doc['client']} · Total: {money(doc['total'])}\n\n"
+                "Reply *YES* to convert or *CANCEL*."), None
     return None
 
 
