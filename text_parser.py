@@ -51,13 +51,14 @@ Return ONLY a JSON object, no prose, no code fences.
 
 Schema:
 {
-  "action": "invoice" | "estimate" | "new_client" | "new_product" | "help" | "unknown",
+  "action": "invoice" | "estimate" | "new_client" | "update_client" | "new_product" | "help" | "unknown",
   "client": {"name": str, "is_new": bool, "email": str|null, "phone": str|null,
              "first_name": str|null, "last_name": str|null} | null,
   "items": [{"product": str, "is_new": bool, "quantity": number,
              "unit_price": number|null, "description": str|null}],
   "new_product": {"name": str, "unit_price": number, "description": str|null} | null,
-  "memo": str|null
+  "memo": str|null,
+  "client_changes": {"name": str|null, "email": str|null, "phone": str|null} | null
 }
 
 Rules:
@@ -70,6 +71,9 @@ Rules:
 - If a CURRENT DRAFT is given and the text is a change request ("make it 3", "add a hedge trim",
   "change client to Bob"), return the FULL updated draft with the change applied, keeping the same action.
 - "new client ..." on its own (no items) -> action "new_client".
+- Changing an existing client's details ("change Brittany's email to b@x.com", "update Joe Smith phone 555-1234",
+  "rename client Bob to Robert Jones") -> action "update_client": "client" is the existing client,
+  "client_changes" holds only the fields being changed (others null).
 - "new product/service ..." on its own -> action "new_product".
 """
 

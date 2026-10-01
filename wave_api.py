@@ -75,7 +75,7 @@ class Wave:
 
     def refresh(self):
         """Reload clients and products from Wave."""
-        self.customers = self._paged("customers", "id name email")
+        self.customers = self._paged("customers", "id name email phone")
         prods = self._paged("products", "id name description unitPrice isSold isArchived defaultSalesTaxes { id }")
         self.products = [p for p in prods if p["isSold"] and not p["isArchived"]]
 
@@ -87,6 +87,13 @@ class Wave:
                 inp[k] = v
         c = self._mutate("customerCreate", "CustomerCreateInput", inp, "customer { id name email }")["customer"]
         self.customers.append(c)
+        return c
+
+    def update_customer(self, customer_id, **changes):
+        """Change a client's name/email/phone in Wave. Only fields given are changed."""
+        inp = {"id": customer_id, **{k: v for k, v in changes.items() if v}}
+        c = self._mutate("customerPatch", "CustomerPatchInput", inp, "customer { id name email phone }")["customer"]
+        self.customers = [c if x["id"] == c["id"] else x for x in self.customers]
         return c
 
     def create_product(self, name, unit_price, description=None):
