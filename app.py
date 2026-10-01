@@ -139,7 +139,7 @@ def client_preview(c):
 
 
 # ---------------- actions ----------------
-def build_draft(parsed):
+def build_draft(parsed, phone=None):
     action = parsed.get("action")
 
     if action in ("invoice", "estimate"):
@@ -161,7 +161,8 @@ def build_draft(parsed):
         return {"kind": "client", "client": c, "parsed": parsed}, client_preview(c)
 
     if action == "update_client":
-        name = (parsed.get("client") or {}).get("name")
+        # No name given ("change email to ...") -> the client of the last invoice/estimate
+        name = (parsed.get("client") or {}).get("name") or (LAST.get(phone) or {}).get("client")
         changes = {k: v for k, v in (parsed.get("client_changes") or {}).items() if v}
         if not name or not changes:
             return None, "Which client and what should change? e.g. \"change Brittany Spears email to b@x.com\""
@@ -258,6 +259,11 @@ CONVERT_RE = re.compile(r"^convert(?:\s+(?:it|the|this))?(?:\s+(?:estimate|quote
                         r"(?:\s+(?:to|into)\s+(?:an?\s+)?invoice)?\s*$", re.I)
 
 
+# "change email to x@y.com", "update phone number to 555-1234"
+QUICK_EDIT_RE = re.compile(r"^(?:change|update|set|new)\s+(?:the\s+|their\s+|client'?s?\s+)?(email|phone)"
+                           r"(?:\s+(?:address|number))?\s+(?:to\s+)?(\S.*)$", re.I)
+
+
 def pick_doc(phone, kind, number):
     """The document a SEND/CONVERT refers to: by number if given, else the last one made here."""
     last = LAST.get(phone)
@@ -327,9 +333,18 @@ def handle(phone, body):
     if done:
         return done
 
+    m = QUICK_EDIT_RE.match(body.strip())
+    if m and LAST.get(phone) and not PENDING.get(phone):
+        # "change email to x@y.com" right after an invoice/estimate -> that client
+        draft, reply = build_draft({"action": "update_client", "client": None,
+                                    "client_changes": {m[1].lower(): m[2].strip()}}, phone)
+        if draft:
+            PENDING[phone] = draft
+        return reply, None
+
     current = PENDING.get(phone, {}).get("parsed")
     parsed = parse(body, [c["name"] for c in wave.customers], [p["name"] for p in wave.products], current)
-    draft, reply = build_draft(parsed)
+    draft, reply = build_draft(parsed, phone)
     if draft:
         PENDING[phone] = draft
     return reply, None
