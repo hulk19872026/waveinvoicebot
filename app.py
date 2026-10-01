@@ -57,9 +57,18 @@ def dec(v, default=None):
         return default
 
 
-def contact(name, email, phone, tag=""):
+def contact(name, email, phone, address=None, tag=""):
     """Client block shown on every estimate/invoice message."""
-    return f"👤 {name}{tag}\n✉️ {email or 'no email on file'}\n📞 {phone or 'no phone on file'}"
+    return (f"👤 {name}{tag}\n✉️ {email or 'no email on file'}\n📞 {phone or 'no phone on file'}\n"
+            f"📍 {address or 'no address on file'}")
+
+
+def plain_address(a):
+    """One-line address from what Claude parsed out of a text."""
+    if not a or not any(a.values()):
+        return None
+    region = " ".join(x for x in (a.get("state"), a.get("zip")) if x)
+    return ", ".join(x for x in (a.get("line1"), a.get("line2"), a.get("city"), region) if x)
 
 
 def best_match(name, records):
@@ -82,7 +91,7 @@ def resolve_client(c):
     match, sugg = best_match(c["name"], wave.customers)
     if match:
         return {"new": False, "id": match["id"], "name": match["name"], "email": match.get("email"),
-                "phone": match.get("phone") or match.get("mobile")}, None
+                "phone": match.get("phone") or match.get("mobile"), "address": match.get("address_text")}, None
     hint = f" Did you mean: {', '.join(sugg)}?" if sugg else ""
     return None, f"❓ I couldn't find client \"{c['name']}\".{hint}\nOr say \"new client {c['name']}\"."
 
@@ -117,6 +126,7 @@ def resolve_items(items):
 def doc_preview(d):
     lines = [f"📄 *{d['kind'].upper()} PREVIEW*",
              contact(d['client']['name'], d['client'].get('email'), d['client'].get('phone'),
+                     d['client'].get('address') if not d['client']['new'] else plain_address(d['client'].get('address')),
                      ' 🆕' if d['client']['new'] else ''), "──────────"]
     subtotal = Decimal(0)
     for it in d["items"]:
@@ -142,6 +152,8 @@ def client_preview(c):
     for k, label in (("email", "Email"), ("phone", "Phone")):
         if c.get(k):
             parts.append(f"{label}: {c[k]}")
+    if plain_address(c.get("address")):
+        parts.append(f"Address: {plain_address(c['address'])}")
     if c.get("warning"):
         parts.append(c["warning"])
     parts.append("\nReply *YES* to add to Wave or *CANCEL*.")
@@ -176,7 +188,8 @@ def build_draft(parsed, phone=None):
     if action == "update_client":
         # No name given ("change email to ...") -> the client of the last invoice/estimate
         name = (parsed.get("client") or {}).get("name") or (LAST.get(phone) or {}).get("client")
-        changes = {k: v for k, v in (parsed.get("client_changes") or {}).items() if v}
+        changes = {k: v for k, v in (parsed.get("client_changes") or {}).items()
+                   if v and (k != "address" or plain_address(v))}
         if not name or not changes:
             return None, "Which client and what should change? e.g. \"change Brittany Spears email to b@x.com\""
         match, sugg = best_match(name, wave.customers)
@@ -187,6 +200,8 @@ def build_draft(parsed, phone=None):
         for k in ("name", "email", "phone"):
             if k in changes:
                 lines.append(f"{k.title()}: {match.get(k) or '—'} → {changes[k]}")
+        if "address" in changes:
+            lines.append(f"Address: {match.get('address_text') or '—'} → {plain_address(changes['address'])}")
         lines.append("\nReply *YES* to save in Wave or *CANCEL*.")
         return {"kind": "client_update", "client": match, "changes": changes, "parsed": parsed}, "\n".join(lines)
 
@@ -207,7 +222,8 @@ def execute(d, phone):
     """Create everything in Wave. Returns (reply_text, media_url)."""
     if d["kind"] == "client":
         c = d["client"]
-        new = wave.create_customer(c["name"], c.get("email"), c.get("phone"), c.get("first_name"), c.get("last_name"))
+        new = wave.create_customer(c["name"], c.get("email"), c.get("phone"), c.get("first_name"), c.get("last_name"),
+                                   c.get("address") if plain_address(c.get("address")) else None)
         return f"✅ Client *{new['name']}* added to Wave.", None
 
     if d["kind"] == "send":
@@ -216,7 +232,7 @@ def execute(d, phone):
         LAST[phone] = doc
         extra = "\nReply *CONVERT* to turn it into an invoice" if doc["kind"] == "estimate" else ""
         return (f"✅ {doc['kind'].title()} *#{doc['number']}* was sent to {to}\n"
-                f"{contact(doc['client'], doc.get('email'), doc.get('phone'))}\nTotal: {money(doc['total'])}{extra}"), None
+                f"{contact(doc['client'], doc.get('email'), doc.get('phone'), doc.get('address'))}\nTotal: {money(doc['total'])}{extra}"), None
 
     if d["kind"] == "convert":
         doc = d["doc"]
@@ -226,15 +242,15 @@ def execute(d, phone):
         if d.get("then_send"):
             wave.send_doc(inv, d["to"])
             return (f"{done}\n✅ Invoice *#{inv['number']}* was sent to {d['to']}\n"
-                    f"{contact(inv['client'], inv.get('email'), inv.get('phone'))}\nTotal: {money(inv['total'])}"
+                    f"{contact(inv['client'], inv.get('email'), inv.get('phone'), inv.get('address'))}\nTotal: {money(inv['total'])}"
                     f"\n\n🔗 {inv['view_url']}"), inv.get("pdf_url")
-        return (f"{done}\n{contact(inv['client'], inv.get('email'), inv.get('phone'))}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
+        return (f"{done}\n{contact(inv['client'], inv.get('email'), inv.get('phone'), inv.get('address'))}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
                 f"{next_steps(inv)}"), inv.get("pdf_url")
 
     if d["kind"] == "client_update":
         c = wave.update_customer(d["client"]["id"], **d["changes"])
-        details = " · ".join(x for x in (c.get("email"), c.get("phone")) if x)
-        return f"✅ Client *{c['name']}* updated in Wave.\n{details}", None
+        return (f"✅ Client updated in Wave.\n"
+                f"{contact(c['name'], c.get('email'), c.get('phone') or c.get('mobile'), c.get('address_text'))}"), None
 
     if d["kind"] == "product":
         p = d["product"]
@@ -244,7 +260,8 @@ def execute(d, phone):
     # invoice / estimate
     c = d["client"]
     if c["new"]:
-        created = wave.create_customer(c["name"], c.get("email"), c.get("phone"), c.get("first_name"), c.get("last_name"))
+        created = wave.create_customer(c["name"], c.get("email"), c.get("phone"), c.get("first_name"), c.get("last_name"),
+                                   c.get("address") if plain_address(c.get("address")) else None)
         customer_id = created["id"]
     else:
         customer_id = c["id"]
@@ -257,7 +274,7 @@ def execute(d, phone):
     doc = create(customer_id, d["items"], d.get("memo"))
     LAST[phone] = doc
     reply = (f"✅ {d['kind'].title()} *#{doc['number']}* created as a draft in Wave\n"
-             f"{contact(doc['client'], doc.get('email'), doc.get('phone'))}\nTotal: {money(doc['total'])}"
+             f"{contact(doc['client'], doc.get('email'), doc.get('phone'), doc.get('address'))}\nTotal: {money(doc['total'])}"
              f"\n\n🔗 {doc['view_url']}\n\n{next_steps(doc)}")
     return reply, doc.get("pdf_url")
 
@@ -315,7 +332,7 @@ def doc_action(phone, convert, send, kind=None, number=None, to=None):
     if send and not to:
         return (f"No email on file for {doc['client']}. Add one with \"change email to name@email.com\" "
                 f"or say \"... to name@email.com\"."), None
-    head = f"{contact(doc['client'], doc.get('email'), doc.get('phone'))}\nTotal: {money(doc['total'])}"
+    head = f"{contact(doc['client'], doc.get('email'), doc.get('phone'), doc.get('address'))}\nTotal: {money(doc['total'])}"
     if convert:
         PENDING[phone] = {"kind": "convert", "doc": doc, "then_send": send, "to": to}
         what = f"CONVERT ESTIMATE #{doc['number']} TO AN INVOICE" + (" AND EMAIL IT" if send else "")

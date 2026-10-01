@@ -53,15 +53,17 @@ Schema:
 {
   "action": "invoice" | "estimate" | "new_client" | "update_client" | "new_product" | "document" | "help" | "unknown",
   "client": {"name": str, "is_new": bool, "email": str|null, "phone": str|null,
-             "first_name": str|null, "last_name": str|null} | null,
+             "first_name": str|null, "last_name": str|null, "address": ADDRESS|null} | null,
   "items": [{"product": str, "is_new": bool, "quantity": number,
              "unit_price": number|null, "description": str|null}],
   "new_product": {"name": str, "unit_price": number, "description": str|null} | null,
   "memo": str|null,
-  "client_changes": {"name": str|null, "email": str|null, "phone": str|null} | null,
+  "client_changes": {"name": str|null, "email": str|null, "phone": str|null, "address": ADDRESS|null} | null,
   "document": {"kind": "estimate"|"invoice"|null, "number": str|null, "convert": bool, "send": bool,
                "send_to": str|null} | null
 }
+ADDRESS = {"line1": str, "line2": str|null, "city": str|null, "state": str|null, "zip": str|null,
+           "country": str|null}  (state as the 2-letter code, e.g. "NY"; country as a 2-letter code, default "US")
 
 Rules:
 - Use the EXACT spelling from the known client/product lists when the text clearly refers to one
@@ -75,9 +77,9 @@ Rules:
   change applied, keeping the same action. Item descriptions in the draft are what will print on the document:
   keep them unless asked to change them; to change one, set that item's "description" to the new text
   ("add X to the description" means append X to the existing text).
-- "new client ..." on its own (no items) -> action "new_client".
+- "new client ..." on its own (no items) -> action "new_client". Include the address if one is given.
 - Changing an existing client's details ("change Brittany's email to b@x.com", "update Joe Smith phone 555-1234",
-  "rename client Bob to Robert Jones") -> action "update_client": "client" is the existing client,
+  "rename client Bob to Robert Jones", "change address to 12 Main St, Brooklyn NY 11201") -> action "update_client": "client" is the existing client,
   "client_changes" holds only the fields being changed (others null). If no client is named
   ("change email to b@x.com"), still use action "update_client" with "client": null.
 - "new product/service ..." on its own -> action "new_product".

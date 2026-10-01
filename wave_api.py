@@ -8,6 +8,26 @@ class WaveError(Exception):
     pass
 
 
+CUSTOMER_FIELDS = ("id name email phone mobile "
+                   "address { addressLine1 addressLine2 city postalCode province { code name } country { code } }")
+COUNTRY_ALIASES = {"USA": "US", "U.S.": "US", "U.S.A.": "US", "UNITED STATES": "US", "CANADA": "CA"}
+
+
+def format_address(a):
+    """One-line address from a Wave Address object (or None if empty)."""
+    if not a:
+        return None
+    prov = (a.get("province") or {}).get("code") or ""
+    region = " ".join(x for x in (prov.split("-")[-1], a.get("postalCode")) if x)
+    parts = [a.get("addressLine1"), a.get("addressLine2"), a.get("city"), region]
+    return ", ".join(x for x in parts if x) or None
+
+
+def _with_address(c):
+    c["address_text"] = format_address(c.get("address"))
+    return c
+
+
 class Wave:
     def __init__(self, token, business_id=None, income_account_id=None):
         self.s = requests.Session()
@@ -18,6 +38,7 @@ class Wave:
         self.business_id = business_id or self._first_business_id()
         self.income_account_id = income_account_id or self._first_income_account_id()
         self.customers, self.products = [], []
+        self._provinces = {}
         self.refresh()
 
     # ---------- low level ----------
@@ -75,24 +96,52 @@ class Wave:
 
     def refresh(self):
         """Reload clients and products from Wave."""
-        self.customers = self._paged("customers", "id name email phone mobile")
+        self.customers = [_with_address(c) for c in self._paged("customers", CUSTOMER_FIELDS)]
         prods = self._paged("products", "id name description unitPrice isSold isArchived defaultSalesTaxes { id }")
         self.products = [p for p in prods if p["isSold"] and not p["isArchived"]]
 
     # ---------- create ----------
-    def create_customer(self, name, email=None, phone=None, first_name=None, last_name=None):
+    def _province_code(self, country, state):
+        """Wave's code for a state/province (e.g. "NY" -> Wave's NY code), looked up once per country."""
+        if not state:
+            return None
+        if country not in self._provinces:
+            q = "query($c: CountryCode!) { country(code: $c) { provinces { code name } } }"
+            self._provinces[country] = (self.gql(q, {"c": country})["country"] or {}).get("provinces") or []
+        st = state.strip().upper()
+        for p in self._provinces[country]:
+            code = p["code"].upper()
+            if st in (code, code.split("-")[-1], p["name"].upper()):
+                return p["code"]
+        return None
+
+    def _address_input(self, a):
+        country = (a.get("country") or "US").strip().upper()
+        country = COUNTRY_ALIASES.get(country, country if len(country) == 2 else "US")
+        inp = {"addressLine1": a.get("line1"), "addressLine2": a.get("line2"), "city": a.get("city"),
+               "postalCode": a.get("zip"), "countryCode": country,
+               "provinceCode": self._province_code(country, a.get("state"))}
+        return {k: v for k, v in inp.items() if v}
+
+    def create_customer(self, name, email=None, phone=None, first_name=None, last_name=None, address=None):
         inp = {"businessId": self.business_id, "name": name}
         for k, v in {"email": email, "phone": phone, "firstName": first_name, "lastName": last_name}.items():
             if v:
                 inp[k] = v
-        c = self._mutate("customerCreate", "CustomerCreateInput", inp, "customer { id name email phone mobile }")["customer"]
-        self.customers.append(c)
+        if address:
+            inp["address"] = self._address_input(address)
+        c = self._mutate("customerCreate", "CustomerCreateInput", inp, f"customer {{ {CUSTOMER_FIELDS} }}")["customer"]
+        self.customers.append(_with_address(c))
         return c
 
     def update_customer(self, customer_id, **changes):
-        """Change a client's name/email/phone in Wave. Only fields given are changed."""
+        """Change a client's name/email/phone/address in Wave. Only fields given are changed."""
+        address = changes.pop("address", None)
         inp = {"id": customer_id, **{k: v for k, v in changes.items() if v}}
-        c = self._mutate("customerPatch", "CustomerPatchInput", inp, "customer { id name email phone mobile }")["customer"]
+        if address:
+            inp["address"] = self._address_input(address)
+        c = _with_address(self._mutate("customerPatch", "CustomerPatchInput", inp,
+                                       f"customer {{ {CUSTOMER_FIELDS} }}")["customer"])
         self.customers = [c if x["id"] == c["id"] else x for x in self.customers]
         return c
 
@@ -134,14 +183,15 @@ class Wave:
         return "estimateNumber" if kind == "estimate" else "invoiceNumber"
 
     def _doc_fields(self, kind):
-        return f"id {self._num_field(kind)} status viewUrl pdfUrl total {{ value }} customer {{ name email phone mobile }}"
+        return f"id {self._num_field(kind)} status viewUrl pdfUrl total {{ value }} customer {{ {CUSTOMER_FIELDS} }}"
 
     def _doc(self, kind, d):
         """Normalize a Wave invoice/estimate into a plain dict."""
         return {"kind": kind, "id": d["id"], "number": d[self._num_field(kind)], "status": d["status"],
                 "view_url": d["viewUrl"], "pdf_url": d["pdfUrl"], "total": d["total"]["value"],
                 "client": d["customer"]["name"], "email": d["customer"].get("email"),
-                "phone": d["customer"].get("phone") or d["customer"].get("mobile")}
+                "phone": d["customer"].get("phone") or d["customer"].get("mobile"),
+                "address": format_address(d["customer"].get("address"))}
 
     def create_invoice(self, customer_id, items, memo=None):
         inp = {"businessId": self.business_id, "customerId": customer_id,
