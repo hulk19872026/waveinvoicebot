@@ -510,9 +510,10 @@ def whatsapp():
         app.logger.exception("handler error")
         text, media = f"⚠️ Something went wrong: {e}", None
 
-    msg = resp.message(text[:1590])  # WhatsApp message limit
+    resp.message(text[:1590])  # WhatsApp message limit
     if media:
-        msg.media(media)
+        # PDF in its own message: if Twilio can't fetch it, the text above still arrives
+        resp.message().media(media)
     return str(resp)
 
 
