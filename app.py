@@ -38,7 +38,9 @@ HELP = (
     "• YES to create · CANCEL to discard · REFRESH to reload lists\n"
     "• Send a change (\"make it 3 lawn mowings\") to edit the preview\n"
     "• SEND to email the last one to the client (or: send estimate 12 to bob@x.com)\n"
-    "• CONVERT to turn the last estimate into an invoice (or: convert estimate 12)"
+    "• CONVERT to turn the last estimate into an invoice (or: convert estimate 12)\n"
+    "• change the door strike price on invoice 12 to 500\n"
+    "• duplicate invoice 12 (or: duplicate invoice 12 for Bob Jones)"
 )
 
 
@@ -247,6 +249,23 @@ def execute(d, phone):
         return (f"{done}\n{contact(inv['client'], inv.get('email'), inv.get('phone'), inv.get('address'))}\nTotal: {money(inv['total'])}\n\n🔗 {inv['view_url']}\n\n"
                 f"{next_steps(inv)}"), inv.get("pdf_url")
 
+    if d["kind"] == "edit_doc":
+        new = wave.patch_doc(d["doc"], items=d["items"])
+        LAST[phone] = new
+        return (f"✅ {new['kind'].title()} *#{new['number']}* updated in Wave\n"
+                f"{contact(new['client'], new.get('email'), new.get('phone'), new.get('address'))}\n"
+                f"Total: {money(new['total'])}\n\n🔗 {new['view_url']}\n\n{next_steps(new)}"), new.get("pdf_url")
+
+    if d["kind"] == "duplicate":
+        src = d["doc"]
+        new = wave.clone_doc(src)
+        if d.get("customer") and d["customer"]["id"] != new.get("customer_id"):
+            new = wave.patch_doc(wave.get_doc_full(new["kind"], new["id"]), customer_id=d["customer"]["id"])
+        LAST[phone] = new
+        return (f"✅ {new['kind'].title()} *#{new['number']}* created as a copy of #{src['number']}\n"
+                f"{contact(new['client'], new.get('email'), new.get('phone'), new.get('address'))}\n"
+                f"Total: {money(new['total'])}\n\n🔗 {new['view_url']}\n\n{next_steps(new)}"), new.get("pdf_url")
+
     if d["kind"] == "client_update":
         c = wave.update_customer(d["client"]["id"], **d["changes"])
         return (f"✅ Client updated in Wave.\n"
@@ -296,6 +315,11 @@ DOC_CMD_RE = re.compile(
     rf"(?:\s+to\s+(?P<to>{EMAIL}))?\s*(?:please)?[.!]*$", re.I)
 
 
+# "duplicate", "duplicate invoice 12", "copy estimate #478"
+DUP_RE = re.compile(r"^(?:please\s+)?(?:duplicate|copy|clone)(?:\s+(?:it|the|this|that))?(?:\s+(?P<kind>estimate|quote|invoice))?"
+                    r"(?:\s*#?\s*(?P<num>\d+))?\s*[.!]*$", re.I)
+
+
 # "change email to x@y.com", "update phone number to 555-1234"
 QUICK_EDIT_RE = re.compile(r"^(?:change|update|set|new)\s+(?:the\s+|their\s+|client'?s?\s+)?(email|phone)"
                            r"(?:\s+(?:address|number))?\s+(?:to\s+)?(\S.*)$", re.I)
@@ -343,8 +367,73 @@ def doc_action(phone, convert, send, kind=None, number=None, to=None):
             "Reply *YES* to email it (PDF attached) or *CANCEL*."), None
 
 
+def edit_action(phone, kind, number, changes):
+    """Preview price/quantity/description changes to an existing invoice/estimate; saved on YES."""
+    if PENDING.get(phone) and not number:
+        return "Something is waiting for your OK. Reply *YES* to confirm it or *CANCEL* first.", None
+    doc, err = pick_doc(phone, kind, number)
+    if err:
+        return err, None
+    full = wave.get_doc_full(doc["kind"], doc["id"])
+    items = full["items"]
+    if not items:
+        return f"{full['kind'].title()} #{full['number']} has no items to change.", None
+    old_subtotal = sum(dec(i["quantity"]) * dec(i["unit_price"]) for i in items)
+    lines = [f"✏️ *EDIT {full['kind'].upper()} #{full['number']}*",
+             contact(full['client'], full.get('email'), full.get('phone'), full.get('address')), "──────────"]
+    for ch in changes or []:
+        it, _ = best_match(ch.get("product") or "", items) if len(items) > 1 or ch.get("product") else (items[0], [])
+        if not it:
+            names = ", ".join(i["name"] for i in items)
+            return f"❓ No \"{ch.get('product')}\" on {full['kind']} #{full['number']}. Items: {names}", None
+        before = f"{dec(it['quantity']).normalize():f} × {money(it['unit_price'])}"
+        if dec(ch.get("unit_price")) is not None:
+            it["unit_price"] = dec(ch["unit_price"])
+        if dec(ch.get("quantity")) is not None:
+            it["quantity"] = dec(ch["quantity"])
+        if ch.get("description"):
+            it["description"] = ch["description"]
+        after = f"{dec(it['quantity']).normalize():f} × {money(it['unit_price'])}"
+        lines.append(f"{it['name']}: {before} → {after}" if before != after else f"{it['name']}")
+        if ch.get("description"):
+            lines.append(f"   📝 {it['description']}")
+    if len(lines) == 3:
+        return "What should change? e.g. \"change the door strike price on invoice 12 to 500\"", None
+    subtotal = sum(dec(i["quantity"]) * dec(i["unit_price"]) for i in items)
+    lines += ["──────────", f"*Subtotal: {money(old_subtotal)} → {money(subtotal)}* (before tax)",
+              "\nReply *YES* to save in Wave or *CANCEL*."]
+    PENDING[phone] = {"kind": "edit_doc", "doc": full, "items": items}
+    return "\n".join(lines), None
+
+
+def duplicate_action(phone, kind, number, for_client=None):
+    """Preview copying an invoice/estimate (optionally for another client); created on YES."""
+    if PENDING.get(phone) and not number:
+        return "Something is waiting for your OK. Reply *YES* to confirm it or *CANCEL* first.", None
+    doc, err = pick_doc(phone, kind, number)
+    if err:
+        return err, None
+    customer = None
+    if for_client:
+        customer, sugg = best_match(for_client, wave.customers)
+        if not customer:
+            hint = f" Did you mean: {', '.join(sugg)}?" if sugg else ""
+            return f"❓ I couldn't find client \"{for_client}\".{hint}", None
+    who = customer or {"name": doc["client"], "email": doc.get("email"), "phone": doc.get("phone"),
+                       "address_text": doc.get("address")}
+    PENDING[phone] = {"kind": "duplicate", "doc": doc, "customer": customer}
+    return (f"📄 *DUPLICATE {doc['kind'].upper()} #{doc['number']}?*\n"
+            f"{contact(who['name'], who.get('email'), who.get('phone') or who.get('mobile'), who.get('address_text'))}\n"
+            f"Total: {money(doc['total'])}\n\nA new draft {doc['kind']} with the same items will be created.\n"
+            "Reply *YES* to create it or *CANCEL*."), None
+
+
 def doc_command(phone, body):
     """Short SEND / CONVERT texts. Returns (reply, media) or None if the text isn't one."""
+    d = DUP_RE.match(body.strip())
+    if d:
+        kind = {"quote": "estimate"}.get((d["kind"] or "").lower(), (d["kind"] or "").lower() or None)
+        return duplicate_action(phone, kind, d["num"])
     m = DOC_CMD_RE.match(body.strip())
     if not m:
         return None
@@ -387,6 +476,10 @@ def handle(phone, body):
     parsed = parse(body, [c["name"] for c in wave.customers], [p["name"] for p in wave.products], current)
     if parsed.get("action") == "document":
         a = parsed.get("document") or {}
+        if a.get("item_changes"):
+            return edit_action(phone, a.get("kind"), a.get("number"), a["item_changes"])
+        if a.get("duplicate"):
+            return duplicate_action(phone, a.get("kind"), a.get("number"), a.get("duplicate_for"))
         return doc_action(phone, bool(a.get("convert")), bool(a.get("send")), a.get("kind"),
                           a.get("number"), a.get("send_to"))
     draft, reply = build_draft(parsed, phone)

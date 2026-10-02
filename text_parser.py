@@ -60,7 +60,9 @@ Schema:
   "memo": str|null,
   "client_changes": {"name": str|null, "email": str|null, "phone": str|null, "address": ADDRESS|null} | null,
   "document": {"kind": "estimate"|"invoice"|null, "number": str|null, "convert": bool, "send": bool,
-               "send_to": str|null} | null
+               "send_to": str|null, "duplicate": bool, "duplicate_for": str|null,
+               "item_changes": [{"product": str|null, "unit_price": number|null, "quantity": number|null,
+                                 "description": str|null}] | null} | null
 }
 ADDRESS = {"line1": str, "line2": str|null, "city": str|null, "state": str|null, "zip": str|null,
            "country": str|null}  (state as the 2-letter code, e.g. "NY"; country as a 2-letter code, default "US")
@@ -86,6 +88,12 @@ Rules:
 - Sending or converting an EXISTING estimate/invoice ("email estimate 478 to the client", "turn 478 into an
   invoice and send it", "convert the last estimate") -> action "document". "number" only if given
   (digits only); "convert" true to turn an estimate into an invoice; "send" true to email it.
+- Changing prices/quantities/descriptions on an EXISTING estimate/invoice ("change the door strike price on
+  invoice 12 to 500", "make labor 4 hours on estimate 478", "lower the price to 400 on the last invoice") ->
+  action "document" with "item_changes" (one entry per item; only the fields being changed). Only when there is
+  no CURRENT DRAFT, or the text names an existing number - otherwise it's a change to the draft.
+- Copying one ("duplicate invoice 12", "same as estimate 478 for Bob Jones") -> action "document" with
+  "duplicate": true, and "duplicate_for" = the other client's name if one is given.
 """
 
 
