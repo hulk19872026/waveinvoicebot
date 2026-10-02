@@ -228,6 +228,49 @@ class Wave:
         edges = self.gql(q, {"b": self.business_id, "n": str(number)})["business"][f"{kind}s"]["edges"]
         return self._doc(kind, edges[0]["node"]) if edges else None
 
+    def get_doc_full(self, kind, doc_id):
+        """An invoice/estimate with its line items (plus what Wave needs to save an estimate back)."""
+        extra = " title estimateDate dueDate exchangeRate currency { code }" if kind == "estimate" else ""
+        q = f"""query($b: ID!, $id: ID!) {{
+            business(id: $b) {{ {kind}(id: $id) {{
+                {self._doc_fields(kind)}{extra}
+                items {{ product {{ id name }} description quantity unitPrice taxes {{ salesTax {{ id }} }} }}
+            }} }}
+        }}"""
+        d = self.gql(q, {"b": self.business_id, "id": doc_id})["business"][kind]
+        if not d:
+            raise WaveError(f"{kind} not found")
+        doc = self._doc(kind, d)
+        doc["customer_id"] = d["customer"]["id"]
+        doc["items"] = [{"product_id": it["product"]["id"], "name": it["product"]["name"],
+                         "description": it.get("description"), "quantity": it["quantity"],
+                         "unit_price": it["unitPrice"], "tax_ids": [t["salesTax"]["id"] for t in it["taxes"]]}
+                        for it in d.get("items") or []]
+        if kind == "estimate":  # estimatePatch requires these to be sent back
+            doc["_estimate"] = {"title": d["title"], "estimateDate": d["estimateDate"], "dueDate": d["dueDate"],
+                                "exchangeRate": d["exchangeRate"], "currency": d["currency"]["code"]}
+        return doc
+
+    def patch_doc(self, full, items=None, customer_id=None):
+        """Save new line items and/or a new client on an existing invoice/estimate."""
+        k = full["kind"]
+        inp = {"id": full["id"]}
+        if items is not None:
+            inp["items"] = self._items(items)
+        if customer_id:
+            inp["customerId"] = customer_id
+        if k == "estimate":
+            inp = {"customerId": full["customer_id"], "status": full["status"], **full["_estimate"], **inp}
+        out = self._mutate(f"{k}Patch", f"{k.title()}PatchInput", inp, f"{k} {{ {self._doc_fields(k)} }}")
+        return self._doc(k, out[k])
+
+    def clone_doc(self, doc):
+        """Copy an invoice/estimate. Returns the new one."""
+        k = doc["kind"]
+        out = self._mutate(f"{k}Clone", f"{k.title()}CloneInput", {f"{k}Id": doc["id"]},
+                           f"{k} {{ {self._doc_fields(k)} }}")
+        return self._doc(k, out[k])
+
     def _approve_if_draft(self, doc):
         # Wave won't email or convert a draft; approving just finalizes it (nothing is sent).
         if doc["status"] == "DRAFT":
