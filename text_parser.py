@@ -108,13 +108,16 @@ def parse(text, client_names, product_names, current_draft=None):
 
     msg = _client.messages.create(
         model=MODEL,
-        max_tokens=1000,
+        # Thinking counts toward max_tokens; long multi-item texts used to run out mid-JSON
+        max_tokens=16000,
+        output_config={"effort": "low"},  # simple extraction: keeps replies inside Twilio's 15s window
         system=SYSTEM,
         messages=[{"role": "user", "content": ctx}],
     )
     raw = "".join(b.text for b in msg.content if b.type == "text")
-    raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
+    start, end = raw.find("{"), raw.rfind("}")
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"action": "unknown"}
+        return json.loads(raw[start:end + 1])
+    except ValueError:
+        print(f"parse failed (stop_reason={msg.stop_reason}): {raw[:500]!r}", flush=True)
+        return {"action": "unknown", "too_long": msg.stop_reason == "max_tokens"}
