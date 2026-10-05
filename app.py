@@ -217,6 +217,8 @@ def build_draft(parsed, phone=None):
 
     if action == "help":
         return None, HELP
+    if parsed.get("too_long"):
+        return None, "😅 That was a lot to read at once. Try sending it in two parts (the second as a change, e.g. \"add ...\")."
     return None, "🤔 Didn't catch that. Text HELP for examples."
 
 
