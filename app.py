@@ -12,7 +12,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 load_dotenv()
 
 from text_parser import check_key, parse  # noqa: E402
-from wave_api import Wave, WaveError  # noqa: E402
+from wave_api import ESTIMATE_VALID_DAYS, Wave, WaveError, estimate_dates, nice_date  # noqa: E402
 
 app = Flask(__name__)
 wave = Wave(os.environ["WAVE_TOKEN"], os.getenv("WAVE_BUSINESS_ID") or None,
@@ -230,11 +230,12 @@ def execute(d, phone):
 
     if d["kind"] == "send":
         doc, to = d["doc"], d["to"]
-        wave.send_doc(doc, to)
+        doc = wave.send_doc(doc, to)
         LAST[phone] = doc
         extra = "\nReply *CONVERT* to turn it into an invoice" if doc["kind"] == "estimate" else ""
         return (f"✅ {doc['kind'].title()} *#{doc['number']}* was sent to {to}\n"
-                f"{contact(doc['client'], doc.get('email'), doc.get('phone'), doc.get('address'))}\nTotal: {money(doc['total'])}{extra}"), None
+                f"{contact(doc['client'], doc.get('email'), doc.get('phone'), doc.get('address'))}\nTotal: {money(doc['total'])}"
+                f"{validity(doc)}{extra}"), None
 
     if d["kind"] == "convert":
         doc = d["doc"]
@@ -254,7 +255,7 @@ def execute(d, phone):
         LAST[phone] = new
         return (f"✅ {new['kind'].title()} *#{new['number']}* updated in Wave\n"
                 f"{contact(new['client'], new.get('email'), new.get('phone'), new.get('address'))}\n"
-                f"Total: {money(new['total'])}\n\n🔗 {new['view_url']}\n\n{next_steps(new)}"), new.get("pdf_url")
+                f"Total: {money(new['total'])}{validity(new)}\n\n🔗 {new['view_url']}\n\n{next_steps(new)}"), new.get("pdf_url")
 
     if d["kind"] == "duplicate":
         src = d["doc"]
@@ -264,7 +265,7 @@ def execute(d, phone):
         LAST[phone] = new
         return (f"✅ {new['kind'].title()} *#{new['number']}* created as a copy of #{src['number']}\n"
                 f"{contact(new['client'], new.get('email'), new.get('phone'), new.get('address'))}\n"
-                f"Total: {money(new['total'])}\n\n🔗 {new['view_url']}\n\n{next_steps(new)}"), new.get("pdf_url")
+                f"Total: {money(new['total'])}{validity(new)}\n\n🔗 {new['view_url']}\n\n{next_steps(new)}"), new.get("pdf_url")
 
     if d["kind"] == "client_update":
         c = wave.update_customer(d["client"]["id"], **d["changes"])
@@ -294,8 +295,17 @@ def execute(d, phone):
     LAST[phone] = doc
     reply = (f"✅ {d['kind'].title()} *#{doc['number']}* created as a draft in Wave\n"
              f"{contact(doc['client'], doc.get('email'), doc.get('phone'), doc.get('address'))}\nTotal: {money(doc['total'])}"
-             f"\n\n🔗 {doc['view_url']}\n\n{next_steps(doc)}")
+             f"{validity(doc)}\n\n🔗 {doc['view_url']}\n\n{next_steps(doc)}")
     return reply, doc.get("pdf_url")
+
+
+def validity(doc):
+    """'Valid until' line for estimates (empty for invoices)."""
+    if doc["kind"] != "estimate" or not doc.get("valid_until"):
+        return ""
+    if doc.get("dates_kept"):
+        return f"\n⚠️ Wave wouldn't change its expiry date, so it still expires {doc['valid_until']}"
+    return f"\n⏳ Valid until {doc['valid_until']} ({ESTIMATE_VALID_DAYS} days)"
 
 
 def next_steps(doc):
@@ -363,6 +373,8 @@ def doc_action(phone, convert, send, kind=None, number=None, to=None):
         return (f"🔁 *{what}?*\n" + (f"To: {to}\n" if send else "") + f"{head}\n\n"
                 "Reply *YES* to go ahead or *CANCEL*."), None
     PENDING[phone] = {"kind": "send", "doc": doc, "to": to}
+    if doc["kind"] == "estimate":
+        head += f"\n⏳ Will be valid until {nice_date(estimate_dates()[1])} ({ESTIMATE_VALID_DAYS} days from today)"
     return (f"📧 *SEND {doc['kind'].upper()} #{doc['number']}?*\nTo: {to}\n{head}\n\n"
             "Reply *YES* to email it (PDF attached) or *CANCEL*."), None
 

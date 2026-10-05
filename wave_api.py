@@ -1,7 +1,23 @@
 """Thin client for Wave's public GraphQL API (https://gql.waveapps.com/graphql/public)."""
+import os
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
 import requests
 
 API_URL = "https://gql.waveapps.com/graphql/public"
+ESTIMATE_VALID_DAYS = int(os.getenv("ESTIMATE_VALID_DAYS", "14"))
+TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "America/New_York"))
+
+
+def estimate_dates():
+    """(estimate date, expiry date) for an estimate issued today: valid ESTIMATE_VALID_DAYS days."""
+    today = datetime.now(TIMEZONE).date()
+    return today.isoformat(), (today + timedelta(days=ESTIMATE_VALID_DAYS)).isoformat()
+
+
+def nice_date(iso):
+    return date.fromisoformat(iso).strftime("%b %-d, %Y") if iso else None
 
 
 class WaveError(Exception):
@@ -183,7 +199,9 @@ class Wave:
         return "estimateNumber" if kind == "estimate" else "invoiceNumber"
 
     def _doc_fields(self, kind):
-        return f"id {self._num_field(kind)} status viewUrl pdfUrl total {{ value }} customer {{ {CUSTOMER_FIELDS} }}"
+        due = " dueDate" if kind == "estimate" else ""
+        return (f"id {self._num_field(kind)} status viewUrl pdfUrl total {{ value }}{due} "
+                f"customer {{ {CUSTOMER_FIELDS} }}")
 
     def _doc(self, kind, d):
         """Normalize a Wave invoice/estimate into a plain dict."""
@@ -191,7 +209,8 @@ class Wave:
                 "view_url": d["viewUrl"], "pdf_url": d["pdfUrl"], "total": d["total"]["value"],
                 "client": d["customer"]["name"], "email": d["customer"].get("email"),
                 "phone": d["customer"].get("phone") or d["customer"].get("mobile"),
-                "address": format_address(d["customer"].get("address"))}
+                "address": format_address(d["customer"].get("address")),
+                "valid_until": nice_date(d.get("dueDate")) if kind == "estimate" else None}
 
     def create_invoice(self, customer_id, items, memo=None):
         inp = {"businessId": self.business_id, "customerId": customer_id,
@@ -202,7 +221,9 @@ class Wave:
         return self._doc("invoice", out["invoice"])
 
     def create_estimate(self, customer_id, items, memo=None):
-        inp = {"businessId": self.business_id, "customerId": customer_id, "items": self._items(items)}
+        issued, expires = estimate_dates()
+        inp = {"businessId": self.business_id, "customerId": customer_id, "items": self._items(items),
+               "estimateDate": issued, "dueDate": expires}
         if memo:
             inp["memo"] = memo
         out = self._mutate("estimateCreate", "EstimateCreateInput", inp, f"estimate {{ {self._doc_fields('estimate')} }}")
@@ -251,7 +272,7 @@ class Wave:
                                 "exchangeRate": d["exchangeRate"], "currency": d["currency"]["code"]}
         return doc
 
-    def patch_doc(self, full, items=None, customer_id=None):
+    def patch_doc(self, full, items=None, customer_id=None, fresh_dates=False):
         """Save new line items and/or a new client on an existing invoice/estimate."""
         k = full["kind"]
         inp = {"id": full["id"]}
@@ -261,6 +282,8 @@ class Wave:
             inp["customerId"] = customer_id
         if k == "estimate":
             inp = {"customerId": full["customer_id"], "status": full["status"], **full["_estimate"], **inp}
+            if fresh_dates:
+                inp["estimateDate"], inp["dueDate"] = estimate_dates()
         out = self._mutate(f"{k}Patch", f"{k.title()}PatchInput", inp, f"{k} {{ {self._doc_fields(k)} }}")
         return self._doc(k, out[k])
 
@@ -269,7 +292,15 @@ class Wave:
         k = doc["kind"]
         out = self._mutate(f"{k}Clone", f"{k.title()}CloneInput", {f"{k}Id": doc["id"]},
                            f"{k} {{ {self._doc_fields(k)} }}")
-        return self._doc(k, out[k])
+        new = self._doc(k, out[k])
+        if k == "estimate":  # a copy starts its own validity period
+            new = self.refresh_estimate_dates(new)
+        return new
+
+    def refresh_estimate_dates(self, doc):
+        """Date an estimate today and make it valid for ESTIMATE_VALID_DAYS days from now."""
+        full = self.get_doc_full("estimate", doc["id"])
+        return self.patch_doc(full, items=full["items"], fresh_dates=True)
 
     def _approve_if_draft(self, doc):
         # Wave won't email or convert a draft; approving just finalizes it (nothing is sent).
@@ -278,11 +309,18 @@ class Wave:
             self._mutate(f"{k}Approve", f"{k.title()}ApproveInput", {f"{k}Id": doc["id"]}, f"{k} {{ id }}")
 
     def send_doc(self, doc, to):
-        """Email an invoice/estimate (with PDF) to the client. Requires email sending enabled in Wave."""
+        """Email an invoice/estimate (with PDF) to the client. Requires email sending enabled in Wave.
+        Estimates are re-dated so they're valid for ESTIMATE_VALID_DAYS days from the day they're sent."""
+        if doc["kind"] == "estimate":
+            try:
+                doc = {**doc, **self.refresh_estimate_dates(doc)}
+            except WaveError:  # e.g. already accepted: send it as it is rather than not at all
+                doc = {**doc, "dates_kept": True}
         self._approve_if_draft(doc)
         k = doc["kind"]
         self._mutate(f"{k}Send", f"{k.title()}SendInput",
                      {f"{k}Id": doc["id"], "to": [to], "attachPDF": True}, f"{k} {{ id }}")
+        return doc
 
     def convert_estimate(self, doc):
         """Turn an estimate into an invoice. Returns the new invoice."""
