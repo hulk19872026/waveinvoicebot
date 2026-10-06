@@ -61,7 +61,8 @@ Schema:
   "client_changes": {"name": str|null, "email": str|null, "phone": str|null, "address": ADDRESS|null} | null,
   "document": {"kind": "estimate"|"invoice"|null, "number": str|null, "convert": bool, "send": bool,
                "send_to": str|null, "duplicate": bool, "duplicate_for": str|null,
-               "item_changes": [{"product": str|null, "unit_price": number|null, "quantity": number|null,
+               "item_changes": [{"action": "change"|"add"|"remove", "product": str|null, "is_new": bool,
+                                 "unit_price": number|null, "quantity": number|null,
                                  "description": str|null}] | null} | null
 }
 ADDRESS = {"line1": str, "line2": str|null, "city": str|null, "state": str|null, "zip": str|null,
@@ -90,7 +91,10 @@ Rules:
   (digits only); "convert" true to turn an estimate into an invoice; "send" true to email it.
 - Changing prices/quantities/descriptions on an EXISTING estimate/invoice ("change the door strike price on
   invoice 12 to 500", "make labor 4 hours on estimate 478", "lower the price to 400 on the last invoice") ->
-  action "document" with "item_changes" (one entry per item; only the fields being changed). Only when there is
+  action "document" with "item_changes" (one entry per item; only the fields being changed). Adding a line
+  ("add 4 speaker cable at 115 to estimate 490") is an entry with "action": "add" (quantity defaults to 1;
+  "is_new" true only if the user says it's a new product); removing one is "action": "remove";
+  otherwise "action": "change". Spoken prices like "one fifteen" mean 115, "thirty five ninety nine" 35.99. Only when there is
   no CURRENT DRAFT, or the text names an existing number - otherwise it's a change to the draft.
 - Copying one ("duplicate invoice 12", "same as estimate 478 for Bob Jones") -> action "document" with
   "duplicate": true, and "duplicate_for" = the other client's name if one is given.
