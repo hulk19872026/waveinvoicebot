@@ -253,6 +253,9 @@ def execute(d, phone):
                 f"{next_steps(inv)}"), inv.get("pdf_url")
 
     if d["kind"] == "edit_doc":
+        for it in d["items"]:
+            if it.get("new"):
+                it["product_id"] = wave.create_product(it["name"], it["unit_price"], it.get("description"))["id"]
         new = wave.patch_doc(d["doc"], items=d["items"])
         LAST[phone] = new
         return (f"✅ {new['kind'].title()} *#{new['number']}* updated in Wave\n"
@@ -345,7 +348,10 @@ def pick_doc(phone, kind, number):
         if not kind:
             return None, f"Estimate or invoice? e.g. \"send estimate {number}\""
         doc = wave.find_doc(kind, number)
-        return (doc, None) if doc else (None, f"❓ Couldn't find {kind} #{number} in Wave.")
+        if doc:
+            return doc, None
+        recent = ", ".join(f"#{d['number']} ({d['client']})" for d in wave.recent_docs(kind))
+        return None, f"❓ Couldn't find {kind} #{number} in Wave." + (f"\nMost recent {kind}s: {recent}" if recent else "")
     if last and (not kind or kind == last["kind"]):
         return wave.get_doc(last["kind"], last["id"]) or last, None
     return None, f"Which one? e.g. \"send {kind or 'estimate'} 12\""
@@ -390,16 +396,28 @@ def edit_action(phone, kind, number, changes):
         return err, None
     full = wave.get_doc_full(doc["kind"], doc["id"])
     items = full["items"]
-    if not items:
-        return f"{full['kind'].title()} #{full['number']} has no items to change.", None
     old_subtotal = sum(dec(i["quantity"]) * dec(i["unit_price"]) for i in items)
     lines = [f"✏️ *EDIT {full['kind'].upper()} #{full['number']}*",
              contact(full['client'], full.get('email'), full.get('phone'), full.get('address')), "──────────"]
     for ch in changes or []:
+        if ch.get("action") == "add":
+            added, errs = resolve_items([{**ch, "product": ch.get("product") or ""}])
+            if errs:
+                return "\n".join(errs), None
+            it = added[0]
+            items.append(it)
+            lines.append(f"➕ {it['quantity'].normalize():f} × {it['name']}{' 🆕' if it['new'] else ''} @ {money(it['unit_price'])}")
+            if it.get("description"):
+                lines.append(f"   📝 {it['description']}")
+            continue
         it, _ = best_match(ch.get("product") or "", items) if len(items) > 1 or ch.get("product") else (items[0], [])
         if not it:
             names = ", ".join(i["name"] for i in items)
             return f"❓ No \"{ch.get('product')}\" on {full['kind']} #{full['number']}. Items: {names}", None
+        if ch.get("action") == "remove":
+            items.remove(it)
+            lines.append(f"➖ {it['name']} (removed)")
+            continue
         before = f"{dec(it['quantity']).normalize():f} × {money(it['unit_price'])}"
         if dec(ch.get("unit_price")) is not None:
             it["unit_price"] = dec(ch["unit_price"])
@@ -413,6 +431,8 @@ def edit_action(phone, kind, number, changes):
             lines.append(f"   📝 {it['description']}")
     if len(lines) == 3:
         return "What should change? e.g. \"change the door strike price on invoice 12 to 500\"", None
+    if not items:
+        return "That would leave no items on it. Change or add something instead.", None
     subtotal = sum(dec(i["quantity"]) * dec(i["unit_price"]) for i in items)
     lines += ["──────────", f"*Subtotal: {money(old_subtotal)} → {money(subtotal)}* (before tax)",
               "\nReply *YES* to save in Wave or *CANCEL*."]

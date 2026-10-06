@@ -236,18 +236,40 @@ class Wave:
         d = self.gql(q, {"b": self.business_id, "id": doc_id})["business"][kind]
         return self._doc(kind, d) if d else None
 
-    def find_doc(self, kind, number):
-        """Look up an invoice/estimate by its number (as shown in Wave)."""
-        sort = "ESTIMATE_NUMBER_DESC" if kind == "estimate" else "[INVOICE_NUMBER_DESC]"
-        q = f"""query($b: ID!, $n: String!) {{
+    def _list_docs(self, kind, page, page_size, extra="", variables=None):
+        sort = "CREATED_AT_DESC" if kind == "estimate" else "[CREATED_AT_DESC]"
+        q = f"""query($b: ID!, $p: Int!{', $n: String!' if extra else ''}) {{
             business(id: $b) {{
-                {kind}s(page: 1, pageSize: 1, sort: {sort}, {self._num_field(kind)}: $n) {{
+                {kind}s(page: $p, pageSize: {page_size}, sort: {sort}{extra}) {{
+                    pageInfo {{ totalPages }}
                     edges {{ node {{ {self._doc_fields(kind)} }} }}
                 }}
             }}
         }}"""
-        edges = self.gql(q, {"b": self.business_id, "n": str(number)})["business"][f"{kind}s"]["edges"]
-        return self._doc(kind, edges[0]["node"]) if edges else None
+        d = self.gql(q, {"b": self.business_id, "p": page, **(variables or {})})["business"][f"{kind}s"]
+        return [self._doc(kind, e["node"]) for e in d["edges"]], d["pageInfo"]["totalPages"] or 1
+
+    def find_doc(self, kind, number):
+        """Look up an invoice/estimate by its number (as shown in Wave)."""
+        want = str(number).strip().lstrip("#")
+        same = lambda doc: doc["number"] == want or doc["number"].lstrip("0") == want.lstrip("0") or (
+            "".join(ch for ch in doc["number"] if ch.isdigit()).lstrip("0") == want.lstrip("0"))
+        docs, _ = self._list_docs(kind, 1, 5, f", {self._num_field(kind)}: $n", {"n": want})
+        hit = next((d for d in docs if same(d)), None)
+        if hit:
+            return hit
+        # Wave's number filter doesn't always match; scan the most recent ones ourselves
+        page, pages = 1, 1
+        while page <= min(pages, 6):
+            docs, pages = self._list_docs(kind, page, 50)
+            hit = next((d for d in docs if same(d)), None)
+            if hit:
+                return hit
+            page += 1
+        return None
+
+    def recent_docs(self, kind, count=5):
+        return self._list_docs(kind, 1, count)[0]
 
     def get_doc_full(self, kind, doc_id):
         """An invoice/estimate with its line items (plus what Wave needs to save an estimate back)."""
