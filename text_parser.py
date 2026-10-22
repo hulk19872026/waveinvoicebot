@@ -75,6 +75,11 @@ Rules:
   Otherwise is_new=false even if you can't find a match.
 - quantity defaults to 1. unit_price is null unless the user states a price (then use it, it overrides the list price).
 - "hours", "hrs", "x", "qty" all indicate quantity.
+- "<product> description <text>" (or "<product>, description: <text>") means <text> is the "description" of
+  that ONE <product> item. Words inside a description are never items themselves and are never matched to
+  other products: "labor description one deadbolt and one j bar on basement" is a single Labor item with
+  description "One deadbolt and one j bar on basement", NOT a "deadbolt" product. Dictated texts often
+  misplace commas around "description"; the product is the word(s) right before "description".
 - If a CURRENT DRAFT is given and the text is a change request ("make it 3", "add a hedge trim",
   "change client to Bob", "change the door strike description to ..."), return the FULL updated draft with the
   change applied, keeping the same action. Item descriptions in the draft are what will print on the document:
